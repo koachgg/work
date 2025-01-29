@@ -1,50 +1,68 @@
+
 import logging
-import time
+import json
 from knowledge_base import KnowledgeBase
 from action_manager import ActionManager
+from mcts import MonteCarloTreeSearch, ReasoningNode
 from typing import List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def run_airrag(question: str):
-    try:
-        logger.info("Initializing components...")
-        kb = KnowledgeBase()
-        action_manager = ActionManager()
-        
-        logger.info("Fetching knowledge...")
-        # Get knowledge
-        terms = kb.extract_search_terms(question)
-        for term in terms:
-            kb.add_knowledge(term)
-        
-        # Get relevant context
-        context = kb.retrieve(question, k=3)
-        if not context:
-            return "Unable to find relevant information to answer the question."
 
-        # Generate answer using retrieval-based approach
-        logger.info("Generating answer...")
-        answer = action_manager.retrieval_answer(question, context)
-        
-        return answer if answer else "Unable to generate a response."
+def load_dataset(dataset_path: str):
+    """
+    Load QA dataset and preprocess it.
+    """
+    with open(dataset_path, "r") as f:
+        data = json.load(f)
+    return [(item["question"], item["answer"]) for item in data]
 
-    except Exception as e:
-        logger.error(f"Error in run_airrag: {str(e)}", exc_info=True)
-        return f"An error occurred: {str(e)}"
+
+def evaluate(queries: List[str], answers: List[str], kb, am):
+    """
+    Evaluate the system on a QA dataset.
+    """
+    correct = 0
+    total = len(queries)
+
+    for query, answer in zip(queries, answers):
+        kb.add_knowledge(query)
+        context = kb.retrieve(query, k=3)
+
+        # Initialize MCTS
+        root_node = ReasoningNode(query)
+        mcts = MonteCarloTreeSearch(root_node, kb, am)
+
+        # Define actions (from action_manager)
+        actions = [
+            am.system_analysis,
+            am.query_transformation,
+            am.retrieval_answer,
+            am.summary_answer
+        ]
+
+        # Run MCTS
+        best_path = mcts.run(max_iterations=20, actions=actions)
+
+        # Check final answer
+        prediction = best_path.split(" -> ")[-1].strip()
+        if prediction.lower() == answer.lower():
+            correct += 1
+
+    accuracy = correct / total
+    print(f"Accuracy: {accuracy:.2%}")
+
 
 if __name__ == "__main__":
-    questions = [
-        "What is the capital of France and what is its population?",
-        "Who invented the telephone and in which year?",
-        "What is the height of Mount Everest?"
-    ]
-    
-    for question in questions:
-        print(f"\nProcessing question: {question}")
-        start_time = time.time()
-        answer = run_airrag(question)
-        end_time = time.time()
-        print(f"Answer: {answer}")
-        print(f"Time taken: {end_time - start_time:.2f} seconds")
+    # Load dataset (e.g., HotpotQA)
+    dataset_path = "hotpotqa.json"
+    dataset = load_dataset(dataset_path)
+    queries, answers = zip(*dataset)
+
+    # Initialize components
+    kb = KnowledgeBase()
+    am = ActionManager()
+
+    # Evaluate on the dataset
+    evaluate(queries, answers, kb, am)
